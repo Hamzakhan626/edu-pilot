@@ -22,12 +22,13 @@ import {
 } from 'lucide-react';
 import { mockClasses } from '@/lib/mock-data';
 import { getCurrentUser } from '@/lib/auth';
+import type { UserRole } from '@/lib/auth';
 
 interface User {
   id: string;
   name: string;
   email: string;
-  role: 'student' | 'teacher' | 'admin';
+  role: UserRole; // ← fixed: was 'student' | 'teacher' | 'admin'
 }
 
 interface ClassItem {
@@ -85,7 +86,16 @@ export default function ClassesPage() {
 
   useEffect(() => {
     const currentUser = getCurrentUser();
-    setUser(currentUser);
+    if (currentUser) {
+      setUser({
+        id:    currentUser.id,
+        name:  currentUser.name,
+        email: currentUser.email,
+        role:  currentUser.role,
+      });
+    } else {
+      setUser(null);
+    }
   }, []);
 
   if (!user) return <div>Loading...</div>;
@@ -271,7 +281,6 @@ export default function ClassesPage() {
               ))}
             </TabsContent>
 
-            {/* Other tabs would be implemented similarly */}
             <TabsContent value="attendance">
               <Card className="border-0 shadow-lg">
                 <CardContent className="p-6 text-center">
