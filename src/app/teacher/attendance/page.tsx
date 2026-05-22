@@ -10,17 +10,17 @@ import {
   CheckCircle, XCircle, Clock, Search, Save, CalendarIcon,
   Users, BookOpen, AlertCircle, Loader2, Download
 } from 'lucide-react';
-
 import { toast } from 'sonner';
-import { supabase } from '@/lib/auth';
+import { supabase, getCurrentUser } from '@/lib/auth';
+import type { UserRole } from '@/lib/auth';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Local types ───────────────────────────────────────────────────────────────
 
-interface User {
+interface PageUser {
   id: string;
-  full_name: string;
+  name: string;
   email: string;
-  role: string;
+  role: UserRole;
 }
 
 interface Student {
@@ -37,7 +37,6 @@ interface Program {
   code: string;
 }
 
-// "Class" in DB = the actual scheduled class students enroll in
 interface ClassItem {
   id: string;
   name: string;
@@ -58,15 +57,15 @@ interface AttendanceNotes {
   [studentId: string]: string;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function extractErrorMessage(err: unknown): string {
   if (err && typeof err === 'object') {
     const e = err as Record<string, unknown>;
     if (typeof e.message === 'string' && e.message) return e.message;
     if (typeof e.details === 'string' && e.details) return e.details;
-    if (typeof e.hint === 'string' && e.hint) return e.hint;
-    if (typeof e.code === 'string' && e.code) return `Error code: ${e.code}`;
+    if (typeof e.hint   === 'string' && e.hint)    return e.hint;
+    if (typeof e.code   === 'string' && e.code)    return `Error code: ${e.code}`;
     const json = JSON.stringify(err);
     if (json !== '{}') return json;
   }
@@ -74,33 +73,33 @@ function extractErrorMessage(err: unknown): string {
   return 'An unknown error occurred';
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function AttendancePage() {
-  const [user, setUser]                           = useState<User | null>(null);
-  const [loading, setLoading]                     = useState(true);
-  const [saving, setSaving]                       = useState(false);
-  const [programs, setPrograms]                   = useState<Program[]>([]);
-  const [classes, setClasses]                     = useState<ClassItem[]>([]);
-  const [students, setStudents]                   = useState<Student[]>([]);
-  const [filteredStudents, setFilteredStudents]   = useState<Student[]>([]);
+  const [user, setUser]                         = useState<PageUser | null>(null);
+  const [loading, setLoading]                   = useState(true);
+  const [saving, setSaving]                     = useState(false);
+  const [programs, setPrograms]                 = useState<Program[]>([]);
+  const [classes, setClasses]                   = useState<ClassItem[]>([]);
+  const [students, setStudents]                 = useState<Student[]>([]);
+  const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
 
-  const [selectedProgram, setSelectedProgram]     = useState<string | null>(null);
-  const [selectedClass, setSelectedClass]         = useState<string | null>(null);
-  const [selectedDate, setSelectedDate]           = useState<string>(
+  const [selectedProgram, setSelectedProgram]   = useState<string | null>(null);
+  const [selectedClass, setSelectedClass]       = useState<string | null>(null);
+  const [selectedDate, setSelectedDate]         = useState<string>(
     new Date().toISOString().split('T')[0]
   );
-  const [searchQuery, setSearchQuery]             = useState('');
+  const [searchQuery, setSearchQuery]           = useState('');
 
-  const [attendance, setAttendance]               = useState<AttendanceStatus>({});
-  const [attendanceNotes, setAttendanceNotes]     = useState<AttendanceNotes>({});
+  const [attendance, setAttendance]             = useState<AttendanceStatus>({});
+  const [attendanceNotes, setAttendanceNotes]   = useState<AttendanceNotes>({});
   const [existingAttendance, setExistingAttendance] = useState(false);
 
   const [stats, setStats] = useState({
     present: 0, absent: 0, late: 0, excused: 0, unmarked: 0,
   });
 
-  // ── Effects ──────────────────────────────────────────────────────────────
+  // ── Effects ────────────────────────────────────────────────────────────────
 
   useEffect(() => { initializeData(); }, []);
 
@@ -148,34 +147,68 @@ export default function AttendancePage() {
     }
   }, [selectedClass, selectedDate]);
 
-  // ── Data fetching ─────────────────────────────────────────────────────────
+  // ── Data fetching ──────────────────────────────────────────────────────────
 
   async function initializeData() {
     try {
       setLoading(true);
 
-      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser();
-      if (authError) { toast.error('Authentication error. Please log in again.'); return; }
-      if (!authUser) { toast.error('Please log in to continue'); return; }
+      // getCurrentUser() may return a type whose `role` includes "parent".
+      // We must never call setUser() directly with that value — map it explicitly.
+      const authUser = getCurrentUser();
 
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('id, full_name, email, role')
-        .eq('id', authUser.id)
-        .single();
+      if (authUser) {
+        // Safely narrow: only allow teacher / admin through
+        if (authUser.role !== 'teacher' && authUser.role !== 'admin') {
+          toast.error('Access denied. Teacher role required.');
+          setLoading(false);
+          return;
+        }
 
-      if (userError) {
-        console.error('User fetch error:', extractErrorMessage(userError));
-        toast.error('Failed to load user profile');
-        return;
+        // Explicit mapping — no direct assignment, avoids the UserRole mismatch
+        setUser({
+          id:    authUser.id,
+          name:  authUser.name,
+          email: authUser.email,
+          role:  authUser.role as UserRole,
+        });
+      } else {
+        // Fallback: try Supabase session directly
+        const { data: { user: sessionUser }, error: authError } =
+          await supabase.auth.getUser();
+
+        if (authError || !sessionUser) {
+          toast.error('Please log in to continue');
+          setLoading(false);
+          return;
+        }
+
+        const { data: dbUser, error: userError } = await supabase
+          .from('users')
+          .select('id, full_name, email, role')
+          .eq('id', sessionUser.id)
+          .single();
+
+        if (userError || !dbUser) {
+          toast.error('Failed to load user profile');
+          setLoading(false);
+          return;
+        }
+
+        if (dbUser.role !== 'teacher' && dbUser.role !== 'admin') {
+          toast.error('Access denied. Teacher role required.');
+          setLoading(false);
+          return;
+        }
+
+        setUser({
+          id:    dbUser.id,
+          name:  dbUser.full_name,
+          email: dbUser.email,
+          role:  dbUser.role as UserRole,
+        });
       }
 
-      if (userData.role !== 'teacher' && userData.role !== 'admin') {
-        toast.error('Access denied. Teacher role required.');
-        return;
-      }
-
-      setUser(userData);
       await fetchPrograms();
     } catch (err) {
       console.error('Init error:', extractErrorMessage(err));
@@ -192,7 +225,11 @@ export default function AttendancePage() {
         .select('id, name, code')
         .order('name');
 
-      if (error) { console.error('Programs error:', extractErrorMessage(error)); toast.error('Failed to load programs'); return; }
+      if (error) {
+        console.error('Programs error:', extractErrorMessage(error));
+        toast.error('Failed to load programs');
+        return;
+      }
       setPrograms(data ?? []);
     } catch (err) {
       console.error('Programs error:', extractErrorMessage(err));
@@ -200,7 +237,6 @@ export default function AttendancePage() {
     }
   }
 
-  // Fetch from `classes` table (not `courses`) — students enroll in classes
   async function fetchClasses(programId: string) {
     try {
       const { data, error } = await supabase
@@ -210,7 +246,11 @@ export default function AttendancePage() {
         .order('semester', { ascending: true })
         .order('name');
 
-      if (error) { console.error('Classes error:', extractErrorMessage(error)); toast.error('Failed to load classes'); return; }
+      if (error) {
+        console.error('Classes error:', extractErrorMessage(error));
+        toast.error('Failed to load classes');
+        return;
+      }
       setClasses(data ?? []);
     } catch (err) {
       console.error('Classes error:', extractErrorMessage(err));
@@ -218,8 +258,6 @@ export default function AttendancePage() {
     }
   }
 
-  // class_enrollments.class_id → classes.id
-  // join to users to get student profile
   async function fetchStudents(classId: string) {
     try {
       const { data: enrollments, error } = await supabase
@@ -256,18 +294,16 @@ export default function AttendancePage() {
     }
   }
 
-  // attendance table: student_id + course_id + attendance_date (unique)
-  // NOTE: attendance.course_id stores the class id (naming mismatch in DB)
   async function checkExistingAttendance(classId: string, date: string) {
     try {
       const { data, error } = await supabase
         .from('attendance')
         .select('student_id, status, notes')
-        .eq('course_id', classId)        // attendance.course_id = the class being attended
+        .eq('course_id', classId)
         .eq('attendance_date', date);
 
       if (error) {
-        console.error('Check attendance error:', extractErrorMessage(error), error);
+        console.error('Check attendance error:', extractErrorMessage(error));
         toast.warning(`Could not load existing attendance: ${extractErrorMessage(error)}`);
         setAttendance({});
         setAttendanceNotes({});
@@ -300,7 +336,7 @@ export default function AttendancePage() {
     }
   }
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   function handleAttendanceChange(studentId: string, status: AttendanceStatusValue) {
     setAttendance(prev => ({
@@ -334,14 +370,13 @@ export default function AttendancePage() {
 
       const records = markedEntries.map(([studentId, status]) => ({
         student_id:      studentId,
-        course_id:       selectedClass,   // attendance table column is course_id
+        course_id:       selectedClass,
         attendance_date: selectedDate,
         status:          status as string,
         notes:           attendanceNotes[studentId] || null,
         created_at:      new Date().toISOString(),
       }));
 
-      // Unique constraint: (student_id, course_id, attendance_date)
       const { error } = await supabase
         .from('attendance')
         .upsert(records, { onConflict: 'student_id,course_id,attendance_date' });
@@ -363,7 +398,10 @@ export default function AttendancePage() {
   }
 
   async function handleExportAttendance() {
-    if (!selectedClass || students.length === 0) { toast.error('No data to export'); return; }
+    if (!selectedClass || students.length === 0) {
+      toast.error('No data to export');
+      return;
+    }
 
     try {
       const cls  = classes.find(c => c.id === selectedClass);
@@ -401,7 +439,7 @@ export default function AttendancePage() {
     }
   }
 
-  // ── Render guards ─────────────────────────────────────────────────────────
+  // ── Render guards ──────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -431,10 +469,10 @@ export default function AttendancePage() {
   const currentClass   = classes.find(c => c.id === selectedClass);
 
   const STATUS_BUTTONS = [
-    { value: 'present' as const, Icon: CheckCircle, bg: 'bg-green-100',  icon: 'text-green-600',  title: 'Present'  },
-    { value: 'absent'  as const, Icon: XCircle,     bg: 'bg-red-100',    icon: 'text-red-600',    title: 'Absent'   },
-    { value: 'late'    as const, Icon: Clock,        bg: 'bg-yellow-100', icon: 'text-yellow-600', title: 'Late'     },
-    { value: 'excused' as const, Icon: AlertCircle,  bg: 'bg-blue-100',   icon: 'text-blue-600',   title: 'Excused'  },
+    { value: 'present' as const, Icon: CheckCircle, bg: 'bg-green-100',  icon: 'text-green-600',  title: 'Present' },
+    { value: 'absent'  as const, Icon: XCircle,     bg: 'bg-red-100',    icon: 'text-red-600',    title: 'Absent'  },
+    { value: 'late'    as const, Icon: Clock,        bg: 'bg-yellow-100', icon: 'text-yellow-600', title: 'Late'    },
+    { value: 'excused' as const, Icon: AlertCircle,  bg: 'bg-blue-100',   icon: 'text-blue-600',   title: 'Excused' },
   ];
 
   const BADGE_STYLES: Record<AttendanceStatusValue, string> = {
@@ -527,7 +565,9 @@ export default function AttendancePage() {
                     <p className="font-semibold text-gray-900">{program.name}</p>
                     <p className="text-sm text-gray-500">{program.code}</p>
                   </div>
-                  {selectedProgram === program.id && <CheckCircle className="h-5 w-5 text-blue-600" />}
+                  {selectedProgram === program.id && (
+                    <CheckCircle className="h-5 w-5 text-blue-600" />
+                  )}
                 </div>
               </button>
             ))}
@@ -578,7 +618,9 @@ export default function AttendancePage() {
                       )}
                     </div>
                   </div>
-                  {selectedClass === cls.id && <CheckCircle className="h-5 w-5 text-green-600" />}
+                  {selectedClass === cls.id && (
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                  )}
                 </div>
               </button>
             ))}
@@ -603,16 +645,26 @@ export default function AttendancePage() {
                 </CardTitle>
                 <CardDescription className="mt-1">
                   {currentClass?.name} ({currentClass?.code})
-                  {currentClass?.section && ` · Section ${currentClass.section}`}
+                  {currentClass?.section  && ` · Section ${currentClass.section}`}
                   {currentClass?.semester && ` · Sem ${currentClass.semester}`}
-                  {currentProgram && ` · ${currentProgram.name}`}
+                  {currentProgram         && ` · ${currentProgram.name}`}
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" onClick={() => handleMarkAll('present')} className="bg-green-50 hover:bg-green-100">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleMarkAll('present')}
+                  className="bg-green-50 hover:bg-green-100"
+                >
                   Mark All Present
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => handleMarkAll('absent')} className="bg-red-50 hover:bg-red-100">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => handleMarkAll('absent')}
+                  className="bg-red-50 hover:bg-red-100"
+                >
                   Mark All Absent
                 </Button>
                 <Button
@@ -648,13 +700,15 @@ export default function AttendancePage() {
               <div className="text-center py-12">
                 <Users className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                 <p className="text-gray-500">
-                  {searchQuery ? 'No students match your search' : 'No active students enrolled in this class'}
+                  {searchQuery
+                    ? 'No students match your search'
+                    : 'No active students enrolled in this class'}
                 </p>
               </div>
             ) : (
               <div className="space-y-3">
                 {filteredStudents.map(student => {
-                  const status = attendance[student.id] ?? null;
+                  const status      = attendance[student.id] ?? null;
                   const borderColor = status ? (BORDER_COLORS[status] ?? '#e5e7eb') : '#e5e7eb';
 
                   return (
@@ -674,7 +728,12 @@ export default function AttendancePage() {
                             />
                           ) : (
                             <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center text-white font-semibold text-sm">
-                              {student.full_name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+                              {student.full_name
+                                .split(' ')
+                                .map(n => n[0])
+                                .join('')
+                                .substring(0, 2)
+                                .toUpperCase()}
                             </div>
                           )}
                         </div>
@@ -682,7 +741,9 @@ export default function AttendancePage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="font-semibold text-gray-900">{student.full_name}</p>
                             {student.enrollment_number && (
-                              <Badge variant="outline" className="text-xs">{student.enrollment_number}</Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {student.enrollment_number}
+                              </Badge>
                             )}
                           </div>
                           <p className="text-sm text-gray-500 truncate">{student.email}</p>
@@ -699,22 +760,31 @@ export default function AttendancePage() {
                               onClick={() => handleAttendanceChange(student.id, value)}
                               title={title}
                               className={`p-3 rounded-lg transition-all ${
-                                status === value ? `${bg} shadow-md` : 'bg-gray-100 hover:bg-gray-200'
+                                status === value
+                                  ? `${bg} shadow-md`
+                                  : 'bg-gray-100 hover:bg-gray-200'
                               }`}
                             >
-                              <Icon className={`h-5 w-5 ${status === value ? icon : 'text-gray-400'}`} />
+                              <Icon
+                                className={`h-5 w-5 ${
+                                  status === value ? icon : 'text-gray-400'
+                                }`}
+                              />
                             </button>
                           ))}
                         </div>
 
-                        {/* Badge */}
+                        {/* Status badge */}
                         {status && (
-                          <Badge variant="outline" className={`min-w-[80px] justify-center ${BADGE_STYLES[status]}`}>
+                          <Badge
+                            variant="outline"
+                            className={`min-w-[80px] justify-center ${BADGE_STYLES[status]}`}
+                          >
                             {status.charAt(0).toUpperCase() + status.slice(1)}
                           </Badge>
                         )}
 
-                        {/* Notes — shown for non-present statuses */}
+                        {/* Notes — only for non-present statuses */}
                         {status && status !== 'present' && (
                           <Input
                             type="text"
@@ -741,7 +811,9 @@ export default function AttendancePage() {
             <div className="bg-blue-100 p-4 rounded-full mb-4">
               <CalendarIcon className="h-12 w-12 text-blue-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Ready to Mark Attendance</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Ready to Mark Attendance
+            </h3>
             <p className="text-gray-500 text-center max-w-md">
               Select a program and class above to start marking attendance for your students
             </p>

@@ -17,12 +17,13 @@ import {
 } from 'lucide-react';
 import { mockAttendance, mockStudents } from '@/lib/mock-data';
 import { getCurrentUser } from '@/lib/auth';
+import type { UserRole } from '@/lib/auth';
 
 interface User {
   id: string;
   name: string;
   email: string;
-  role: 'student' | 'teacher' | 'admin';
+  role: UserRole; // ← was 'student' | 'teacher' | 'admin', now uses the full UserRole from auth
 }
 
 interface AttendanceRecord {
@@ -46,7 +47,16 @@ export default function AttendancePage() {
 
   useEffect(() => {
     const currentUser = getCurrentUser();
-    setUser(currentUser);
+    if (currentUser) {
+      setUser({
+        id:    currentUser.id,
+        name:  currentUser.name,
+        email: currentUser.email,
+        role:  currentUser.role,
+      });
+    } else {
+      setUser(null);
+    }
   }, []);
 
   if (!user) return <div>Loading...</div>;
@@ -266,7 +276,7 @@ export default function AttendancePage() {
                 <div className="flex items-center space-x-3">
                   <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center">
                     <span className="font-medium text-sm">
-                      {student.name.split(' ').map(n => n[0]).join('')}
+                      {student.name.split(' ').map((n: string) => n[0]).join('')}
                     </span>
                   </div>
                   <div>
