@@ -22,16 +22,8 @@ import {
   MapPin,
   Save
 } from 'lucide-react';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser, type User as AuthUser } from '@/lib/auth';
 import { toast } from 'sonner';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'student' | 'teacher' | 'admin';
-  avatar?: string;
-}
 
 interface NotificationSettings {
   assignments: boolean;
@@ -43,7 +35,7 @@ interface NotificationSettings {
 }
 
 export default function SettingsPage() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [notifications, setNotifications] = useState<NotificationSettings>({
     assignments: true,
     quizzes: true,

@@ -19,14 +19,7 @@ import {
   Play
 } from 'lucide-react';
 import { mockQuizzes } from '@/lib/mock-data';
-import { getCurrentUser } from '@/lib/auth';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: 'student' | 'teacher' | 'admin';
-}
+import { getCurrentUser, type User } from '@/lib/auth';
 
 interface Question {
   id: string;
