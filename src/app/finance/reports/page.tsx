@@ -711,10 +711,12 @@ export default function FinanceReportsPage() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number | string) =>
-                      formatCurrency(Number(value))
-                    }
-                  />
+                      formatter={(value) => {
+                        if (value == null) return formatCurrency(0);
+
+                        return formatCurrency(Number(value));
+                      }}
+                    />
                 </RePieChart>
               </ResponsiveContainer>
             ) : (
