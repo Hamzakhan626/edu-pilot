@@ -1,33 +1,27 @@
-/* eslint-disable react/no-unescaped-entities */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { toast } from "sonner";
+import supabase from "@/lib/supabase/client";
+import { getCurrentUser } from "@/lib/auth";
+import { format } from "date-fns";
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
-  BookOpen,
-  Clock,
-  Users,
-  CheckCircle,
-  Play,
-  AlertCircle,
-  ArrowRight,
-  Filter,
-  Download,
-  Upload,
-  FileText,
-  Calendar,
-  Eye,
-} from "lucide-react";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -35,634 +29,560 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ClipboardList,
+  CheckCircle,
+  AlertCircle,
+  Calendar,
+  Upload,
+  FileText,
+  Eye,
+  Download,
+  GraduationCap,
+  BookOpen,
+  Sparkles,
+  Paperclip,
+  ArrowUpCircle,
+  Search,
+  Loader2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
-interface Assignment {
+// ─── Types ────────────────────────────────────────────────────────────────
+type Course = {
   id: string;
-  courseId: string;
-  courseName: string;
-  courseCode: string;
+  name: string;
+  code: string;
+  section?: string | null;
+};
+
+type Assignment = {
+  id: string;
+  course_id: string;
   title: string;
-  description: string;
-  uploadedDate: string;
-  dueDate: string;
-  totalMarks: number;
-  obtainedMarks?: number;
-  status: "pending" | "submitted" | "graded" | "late";
-  submittedDate?: string;
-  fileUrl?: string;
-  submissionFileUrl?: string;
-  feedback?: string;
-  semester: string;
-}
+  description: string | null;
+  due_date: string | null;
+  max_score: number;
+  created_at: string;
+  attachment_url?: string | null;
+  attachment_name?: string | null;
+  course_name: string;
+  course_code: string;
+  course_section?: string | null;
+  submission_status: "pending" | "submitted" | "graded" | "late";
+  submission_id?: string | null;
+  submission_score?: number | null;
+  submission_feedback?: string | null;
+  submission_attachment_url?: string | null;
+  submission_attachment_name?: string | null;
+  submitted_at?: string | null;
+};
 
+// ─── Helpers ──────────────────────────────────────────────────────────────
+const getSubmissionStatusColor = (status: string) => {
+  switch (status) {
+    case "graded":    return "bg-green-100 text-green-800 border-green-200";
+    case "submitted": return "bg-blue-100 text-blue-800 border-blue-200";
+    case "late":      return "bg-amber-100 text-amber-800 border-amber-200";
+    default:          return "bg-gray-100 text-gray-600 border-gray-200";
+  }
+};
+
+const isOverdue = (assignment: Assignment) => {
+  if (!assignment.due_date) return false;
+  if (assignment.submission_status === "submitted" || assignment.submission_status === "graded") return false;
+  return new Date(assignment.due_date) < new Date();
+};
+
+// ─── Component ────────────────────────────────────────────────────────────
 export default function StudentAssignmentsPage() {
-  const [selectedSemester, setSelectedSemester] = useState<string>("current");
-  const [selectedCourse, setSelectedCourse] = useState<string>("all");
-  const [activeTab, setActiveTab] = useState<
-    "pending" | "submitted" | "graded"
-  >("pending");
+  const user = getCurrentUser();
+  const studentId = user?.id;
 
-  // Available semesters
-  const semesters = [
-    { value: "current", label: "Current Semester (Fall 2024)" },
-    { value: "spring-2024", label: "Spring 2024" },
-    { value: "fall-2023", label: "Fall 2023" },
-    { value: "spring-2023", label: "Spring 2023" },
-  ];
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState<string>("");
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Student's enrolled courses
-  const courses = [
-    { id: "cs101", name: "Introduction to Web Development", code: "WEB101" },
-    { id: "db201", name: "Database Design", code: "DB201" },
-    { id: "react301", name: "React Advanced Patterns", code: "REACT301" },
-    { id: "calc101", name: "Calculus Fundamentals", code: "CALC101" },
-    { id: "linalg201", name: "Linear Algebra", code: "LINALG201" },
-  ];
+  // ✅ NEW: status filter
+  const [selectedStatus, setSelectedStatus] = useState<
+    "all" | "pending" | "submitted" | "graded" | "overdue"
+  >("all");
 
-  // Mock assignments data
-  const allAssignments: Assignment[] = [
-    // Current Semester - Pending
-    {
-      id: "a1",
-      courseId: "cs101",
-      courseName: "Introduction to Web Development",
-      courseCode: "WEB101",
-      title: "Build a Personal Portfolio Website",
-      description:
-        "Create a responsive portfolio website using HTML, CSS, and JavaScript. Include at least 4 pages: Home, About, Projects, and Contact.",
-      uploadedDate: "Dec 1, 2024",
-      dueDate: "Dec 20, 2024",
-      totalMarks: 100,
-      status: "pending",
-      fileUrl: "/assignments/web101-assignment3.pdf",
-      semester: "current",
-    },
-    {
-      id: "a2",
-      courseId: "db201",
-      courseName: "Database Design",
-      courseCode: "DB201",
-      title: "Design a Movie Database Schema",
-      description:
-        "Create a normalized database schema for a movie rental system. Include ER diagrams and SQL scripts.",
-      uploadedDate: "Nov 28, 2024",
-      dueDate: "Dec 18, 2024",
-      totalMarks: 80,
-      status: "pending",
-      fileUrl: "/assignments/db201-assignment2.pdf",
-      semester: "current",
-    },
-    {
-      id: "a3",
-      courseId: "react301",
-      courseName: "React Advanced Patterns",
-      courseCode: "REACT301",
-      title: "Create a State Management System",
-      description:
-        "Build a custom state management solution using Context API and useReducer. Implement at least 3 different features.",
-      uploadedDate: "Dec 5, 2024",
-      dueDate: "Dec 25, 2024",
-      totalMarks: 120,
-      status: "pending",
-      fileUrl: "/assignments/react301-assignment3.pdf",
-      semester: "current",
-    },
-    // Current Semester - Submitted
-    {
-      id: "a4",
-      courseId: "cs101",
-      courseName: "Introduction to Web Development",
-      courseCode: "WEB101",
-      title: "CSS Grid Layout Project",
-      description:
-        "Create a magazine-style layout using CSS Grid. Must be responsive and work on all devices.",
-      uploadedDate: "Nov 15, 2024",
-      dueDate: "Dec 5, 2024",
-      totalMarks: 60,
-      status: "submitted",
-      submittedDate: "Dec 4, 2024",
-      fileUrl: "/assignments/web101-assignment2.pdf",
-      submissionFileUrl: "/submissions/web101-a2-submission.zip",
-      semester: "current",
-    },
-    {
-      id: "a5",
-      courseId: "linalg201",
-      courseName: "Linear Algebra",
-      courseCode: "LINALG201",
-      title: "Matrix Transformation Project",
-      description:
-        "Solve 10 problems related to matrix transformations and provide detailed explanations.",
-      uploadedDate: "Nov 20, 2024",
-      dueDate: "Dec 22, 2024",
-      totalMarks: 100,
-      status: "submitted",
-      submittedDate: "Dec 8, 2024",
-      fileUrl: "/assignments/linalg201-assignment4.pdf",
-      submissionFileUrl: "/submissions/linalg201-a4-submission.pdf",
-      semester: "current",
-    },
-    // Current Semester - Graded
-    {
-      id: "a6",
-      courseId: "cs101",
-      courseName: "Introduction to Web Development",
-      courseCode: "WEB101",
-      title: "JavaScript Fundamentals Quiz",
-      description:
-        "Complete the online quiz covering variables, functions, arrays, and objects.",
-      uploadedDate: "Nov 1, 2024",
-      dueDate: "Nov 15, 2024",
-      totalMarks: 50,
-      obtainedMarks: 45,
-      status: "graded",
-      submittedDate: "Nov 14, 2024",
-      fileUrl: "/assignments/web101-assignment1.pdf",
-      submissionFileUrl: "/submissions/web101-a1-submission.pdf",
-      feedback:
-        "Excellent work! Good understanding of JavaScript concepts. Minor mistakes in array methods.",
-      semester: "current",
-    },
-    {
-      id: "a7",
-      courseId: "db201",
-      courseName: "Database Design",
-      courseCode: "DB201",
-      title: "SQL Queries Assignment",
-      description:
-        "Write complex SQL queries for the given database schema. Include joins, subqueries, and aggregations.",
-      uploadedDate: "Oct 25, 2024",
-      dueDate: "Nov 10, 2024",
-      totalMarks: 70,
-      obtainedMarks: 68,
-      status: "graded",
-      submittedDate: "Nov 9, 2024",
-      fileUrl: "/assignments/db201-assignment1.pdf",
-      submissionFileUrl: "/submissions/db201-a1-submission.sql",
-      feedback:
-        "Great work on complex queries. Watch out for optimization opportunities.",
-      semester: "current",
-    },
-    {
-      id: "a8",
-      courseId: "react301",
-      courseName: "React Advanced Patterns",
-      courseCode: "REACT301",
-      title: "Component Composition Exercise",
-      description:
-        "Refactor the provided code using composition patterns and custom hooks.",
-      uploadedDate: "Oct 20, 2024",
-      dueDate: "Nov 5, 2024",
-      totalMarks: 90,
-      obtainedMarks: 82,
-      status: "graded",
-      submittedDate: "Nov 4, 2024",
-      fileUrl: "/assignments/react301-assignment1.pdf",
-      submissionFileUrl: "/submissions/react301-a1-submission.zip",
-      feedback:
-        "Good use of composition. Could improve hook dependencies and memoization.",
-      semester: "current",
-    },
-    // Spring 2024
-    {
-      id: "a9",
-      courseId: "calc101",
-      courseName: "Calculus Fundamentals",
-      courseCode: "CALC101",
-      title: "Derivatives and Applications",
-      description:
-        "Solve 15 problems on derivatives, limits, and real-world applications.",
-      uploadedDate: "May 1, 2024",
-      dueDate: "May 20, 2024",
-      totalMarks: 100,
-      obtainedMarks: 95,
-      status: "graded",
-      submittedDate: "May 18, 2024",
-      fileUrl: "/assignments/calc101-final.pdf",
-      submissionFileUrl: "/submissions/calc101-final-submission.pdf",
-      feedback: "Outstanding performance! Perfect understanding of concepts.",
-      semester: "spring-2024",
-    },
-    {
-      id: "a10",
-      courseId: "cs101",
-      courseName: "Introduction to Web Development",
-      courseCode: "WEB101",
-      title: "HTML & CSS Basics Project",
-      description:
-        "Create a static website with at least 3 pages using semantic HTML and CSS.",
-      uploadedDate: "Apr 10, 2024",
-      dueDate: "Apr 30, 2024",
-      totalMarks: 60,
-      obtainedMarks: 58,
-      status: "graded",
-      submittedDate: "Apr 29, 2024",
-      fileUrl: "/assignments/web101-spring-a1.pdf",
-      submissionFileUrl: "/submissions/web101-spring-a1-submission.zip",
-      feedback: "Good work on semantic HTML. Minor CSS alignment issues.",
-      semester: "spring-2024",
-    },
-  ];
+  // Dialogs
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [showSubmitDialog, setShowSubmitDialog] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Filter assignments based on selections
-  const filteredAssignments = allAssignments.filter((assignment) => {
-    const semesterMatch =
-      selectedSemester === "all" || assignment.semester === selectedSemester;
-    const courseMatch =
-      selectedCourse === "all" || assignment.courseId === selectedCourse;
-    const statusMatch =
-      assignment.status === activeTab ||
-      (activeTab === "pending" && assignment.status === "late");
-    return semesterMatch && courseMatch && statusMatch;
-  });
+  const [showViewDialog, setShowViewDialog] = useState(false);
+  const [viewAssignment, setViewAssignment] = useState<Assignment | null>(null);
 
-  const handleFileUpload = (assignmentId: string) => {
-    // Simulated file upload
-    console.log(`Uploading file for assignment: ${assignmentId}`);
-    alert("File upload feature will be implemented with backend integration");
+  // Fetch courses from student_courses
+  useEffect(() => {
+    if (!studentId) return;
+    const fetchCourses = async () => {
+      setLoading(true);
+      try {
+        const { data: enrollData, error: enrollErr } = await supabase
+          .from("student_courses")
+          .select("course_id")
+          .eq("student_id", studentId);
+        if (enrollErr) throw new Error(enrollErr.message);
+
+        if (enrollData?.length) {
+          const courseIds = enrollData.map((e: any) => e.course_id);
+          const { data: courseData, error: courseErr } = await supabase
+            .from("courses")
+            .select("id, name, code, section")
+            .in("id", courseIds)
+            .order("name");
+          if (courseErr) throw new Error(courseErr.message);
+          setCourses(courseData || []);
+        }
+      } catch (err: any) {
+        toast.error(err.message || "Failed to load courses");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchCourses();
+  }, [studentId]);
+
+  // Fetch assignments + submissions
+  useEffect(() => {
+    if (!studentId || courses.length === 0) return;
+    const courseIds = selectedCourseId ? [selectedCourseId] : courses.map((c) => c.id);
+
+    const fetchAssignments = async () => {
+      setLoadingAssignments(true);
+      try {
+        const { data: assignData, error: assignErr } = await supabase
+          .from("assignments")
+          .select("*")
+          .in("class_id", courseIds)
+          .order("created_at", { ascending: false });
+        if (assignErr) throw new Error(assignErr.message);
+
+        if (!assignData?.length) {
+          setAssignments([]);
+          setLoadingAssignments(false);
+          return;
+        }
+
+        const assignmentIds = assignData.map((a: any) => a.id);
+        const { data: subData, error: subErr } = await supabase
+          .from("assignment_submissions")
+          .select("*")
+          .eq("student_id", studentId)
+          .in("assignment_id", assignmentIds);
+        if (subErr) throw new Error(subErr.message);
+
+        const submissionMap = new Map<string, any>();
+        subData?.forEach((sub: any) => submissionMap.set(sub.assignment_id, sub));
+
+        const courseMap = new Map(courses.map((c) => [c.id, c]));
+
+        const enriched: Assignment[] = assignData.map((a: any) => {
+          const course = courseMap.get(a.class_id);
+          const submission = submissionMap.get(a.id);
+          let status: Assignment["submission_status"] = "pending";
+          if (submission) {
+            status = submission.status;
+          } else if (a.due_date && new Date(a.due_date) < new Date()) {
+            status = "late";
+          }
+          return {
+            id: a.id,
+            course_id: a.class_id,
+            title: a.title,
+            description: a.description,
+            due_date: a.due_date,
+            max_score: a.max_score,
+            created_at: a.created_at,
+            attachment_url: a.attachment_url,
+            attachment_name: a.attachment_name,
+            course_name: course?.name || "Unknown",
+            course_code: course?.code || "",
+            course_section: course?.section,
+            submission_status: status,
+            submission_id: submission?.id || null,
+            submission_score: submission?.score ?? null,
+            submission_feedback: submission?.feedback ?? null,
+            submission_attachment_url: submission?.attachment_url ?? null,
+            submission_attachment_name: submission?.attachment_name ?? null,
+            submitted_at: submission?.submitted_at ?? null,
+          };
+        });
+        setAssignments(enriched);
+      } catch (err: any) {
+        toast.error(err.message || "Failed to load assignments");
+      } finally {
+        setLoadingAssignments(false);
+      }
+    };
+    fetchAssignments();
+  }, [studentId, courses, selectedCourseId]);
+
+  // Filter assignments by search AND status
+  const filteredAssignments = useMemo(() => {
+    let filtered = assignments;
+
+    // Search filter
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (a) =>
+          a.title.toLowerCase().includes(q) ||
+          a.course_name.toLowerCase().includes(q) ||
+          a.course_code.toLowerCase().includes(q) ||
+          (a.description && a.description.toLowerCase().includes(q))
+      );
+    }
+
+    // Status filter
+    if (selectedStatus !== "all") {
+      if (selectedStatus === "overdue") {
+        // Show all assignments that are currently overdue (late or past due without submission)
+        filtered = filtered.filter(isOverdue);
+      } else {
+        // Match exact submission status (pending, submitted, graded)
+        filtered = filtered.filter((a) => a.submission_status === selectedStatus);
+      }
+    }
+
+    return filtered;
+  }, [assignments, searchQuery, selectedStatus]);
+
+  // Statistics
+  const stats = useMemo(() => {
+    const total = assignments.length;
+    const pending = assignments.filter(
+      (a) => a.submission_status === "pending" || a.submission_status === "late"
+    ).length;
+    const submitted = assignments.filter((a) => a.submission_status === "submitted").length;
+    const graded = assignments.filter((a) => a.submission_status === "graded").length;
+    const overdue = assignments.filter(isOverdue).length;
+    return { total, pending, submitted, graded, overdue };
+  }, [assignments]);
+
+  // Upload submission
+  const handleSubmitAssignment = async () => {
+    if (!uploadFile || !selectedAssignment) return;
+    setUploading(true);
+    try {
+      const fileExt = uploadFile.name.split(".").pop();
+      const fileName = `${studentId}/${selectedAssignment.id}/${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `submissions/${fileName}`;
+      const { error: uploadError } = await supabase.storage
+        .from("assignment-files")
+        .upload(filePath, uploadFile, { upsert: true });
+      if (uploadError) throw new Error(uploadError.message);
+
+      const { data: urlData } = supabase.storage
+        .from("assignment-files")
+        .getPublicUrl(filePath);
+      const publicUrl = urlData?.publicUrl;
+      if (!publicUrl) throw new Error("Failed to get public URL");
+
+      setSubmitting(true);
+      const submissionData = {
+        assignment_id: selectedAssignment.id,
+        student_id: studentId,
+        status: "submitted",
+        submitted_at: new Date().toISOString(),
+        attachment_url: publicUrl,
+        attachment_name: uploadFile.name,
+      };
+      const { error: insertError } = await supabase
+        .from("assignment_submissions")
+        .upsert(submissionData, { onConflict: "assignment_id,student_id" });
+      if (insertError) throw new Error(insertError.message);
+
+      toast.success("Assignment submitted successfully!");
+      setAssignments((prev) =>
+        prev.map((a) =>
+          a.id === selectedAssignment.id
+            ? {
+                ...a,
+                submission_status: "submitted",
+                submission_attachment_url: publicUrl,
+                submission_attachment_name: uploadFile.name,
+                submitted_at: new Date().toISOString(),
+              }
+            : a
+        )
+      );
+      setSelectedAssignment(null);
+      setUploadFile(null);
+      setShowSubmitDialog(false);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to submit assignment");
+    } finally {
+      setUploading(false);
+      setSubmitting(false);
+    }
   };
 
-  const handleDownload = (fileUrl: string, fileName: string) => {
-    console.log(`Downloading: ${fileName}`);
-    alert(`Downloading ${fileName}...`);
-  };
+  const openSubmitDialog = (a: Assignment) => { setSelectedAssignment(a); setUploadFile(null); setShowSubmitDialog(true); };
+  const openViewDialog = (a: Assignment) => { setViewAssignment(a); setShowViewDialog(true); };
 
-  // Get statistics
-  const pendingCount = allAssignments.filter(
-    (a) => a.status === "pending" && a.semester === selectedSemester
-  ).length;
-  const submittedCount = allAssignments.filter(
-    (a) => a.status === "submitted" && a.semester === selectedSemester
-  ).length;
-  const gradedCount = allAssignments.filter(
-    (a) => a.status === "graded" && a.semester === selectedSemester
-  ).length;
-
-  const getDaysUntilDue = (dueDate: string) => {
-    const due = new Date(dueDate);
-    const today = new Date();
-    const diffTime = due.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
-
-  const getDueDateColor = (dueDate: string, status: string) => {
-    if (status !== "pending") return "text-muted-foreground";
-    const days = getDaysUntilDue(dueDate);
-    if (days < 0) return "text-red-600 dark:text-red-400";
-    if (days <= 3) return "text-amber-600 dark:text-amber-400";
-    return "text-green-600 dark:text-green-400";
-  };
+  if (!studentId) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+        <span className="ml-3 text-slate-500">Loading your profile...</span>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-background p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-slate-50 px-6 py-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">
-            My Assignments
-          </h1>
-          <p className="text-muted-foreground">
-            Track and manage all your course assignments in one place
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-2">
+              <Sparkles className="h-8 w-8 text-blue-500" /> My Assignments
+            </h1>
+            <p className="text-sm text-slate-500 mt-1">
+              Submit your work and track your grades
+            </p>
+          </div>
+          <select
+            value={selectedCourseId}
+            onChange={(e) => setSelectedCourseId(e.target.value)}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={loading}
+          >
+            <option value="">All Courses</option>
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
+            ))}
+          </select>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Pending</p>
-                  <p className="text-3xl font-bold text-foreground">
-                    {pendingCount}
-                  </p>
-                </div>
-                <div className="p-3 bg-amber-100 dark:bg-amber-900/20 rounded-full">
-                  <Clock className="w-6 h-6 text-amber-600 dark:text-amber-400" />
-                </div>
-              </div>
+        {/* Stats cards (now includes overdue count) */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg"><ClipboardList className="h-5 w-5 text-blue-600" /></div>
+              <div><p className="text-2xl font-bold">{stats.total}</p><p className="text-xs text-slate-500">Total</p></div>
             </CardContent>
           </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">
-                    Submitted
-                  </p>
-                  <p className="text-3xl font-bold text-foreground">
-                    {submittedCount}
-                  </p>
-                </div>
-                <div className="p-3 bg-blue-100 dark:bg-blue-900/20 rounded-full">
-                  <Upload className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-                </div>
-              </div>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg"><AlertCircle className="h-5 w-5 text-amber-600" /></div>
+              <div><p className="text-2xl font-bold">{stats.pending}</p><p className="text-xs text-slate-500">Pending</p></div>
             </CardContent>
           </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">Graded</p>
-                  <p className="text-3xl font-bold text-foreground">
-                    {gradedCount}
-                  </p>
-                </div>
-                <div className="p-3 bg-green-100 dark:bg-green-900/20 rounded-full">
-                  <CheckCircle className="w-6 h-6 text-green-600 dark:text-green-400" />
-                </div>
-              </div>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg"><Upload className="h-5 w-5 text-blue-600" /></div>
+              <div><p className="text-2xl font-bold">{stats.submitted}</p><p className="text-xs text-slate-500">Submitted</p></div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 bg-green-100 rounded-lg"><GraduationCap className="h-5 w-5 text-green-600" /></div>
+              <div><p className="text-2xl font-bold">{stats.graded}</p><p className="text-xs text-slate-500">Graded</p></div>
+            </CardContent>
+          </Card>
+          <Card className="border-0 shadow-sm">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="p-2 bg-red-100 rounded-lg"><AlertCircle className="h-5 w-5 text-red-600" /></div>
+              <div><p className="text-2xl font-bold">{stats.overdue}</p><p className="text-xs text-slate-500">Overdue</p></div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Filters */}
-        <Card className="mb-6">
-          <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row gap-4">
-              <div className="flex-1">
-                <label className="text-sm font-medium text-foreground mb-2 block">
-                  Semester
-                </label>
-                <Select
-                  value={selectedSemester}
-                  onValueChange={setSelectedSemester}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select semester" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {semesters.map((sem) => (
-                      <SelectItem key={sem.value} value={sem.value}>
-                        {sem.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+        {/* Filters row */}
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative max-w-sm flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <Input
+              placeholder="Search assignments..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-9 text-sm border-slate-200"
+            />
+          </div>
+          <Select value={selectedStatus} onValueChange={(v: any) => setSelectedStatus(v)}>
+            <SelectTrigger className="w-[180px] h-9 text-sm">
+              <SelectValue placeholder="All Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="submitted">Submitted</SelectItem>
+              <SelectItem value="graded">Graded</SelectItem>
+              <SelectItem value="overdue">Overdue</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
 
-              <div className="flex-1">
-                <label className="text-sm font-medium text-foreground mb-2 block">
-                  Course
-                </label>
-                <Select
-                  value={selectedCourse}
-                  onValueChange={setSelectedCourse}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select course" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Courses</SelectItem>
-                    {courses.map((course) => (
-                      <SelectItem key={course.id} value={course.id}>
-                        {course.code} - {course.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+        {/* Assignments list */}
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-slate-400" />
+              <span className="text-sm font-semibold text-slate-700">Assignments</span>
             </div>
-          </CardContent>
-        </Card>
+            <span className="text-xs text-slate-400">
+              {filteredAssignments.length} assignment{filteredAssignments.length !== 1 ? "s" : ""}
+            </span>
+          </div>
 
-        {/* Tabs for Assignment Status */}
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => setActiveTab(value as any)}
-          className="mb-6"
-        >
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="pending" className="gap-2">
-              <Clock className="w-4 h-4" />
-              Pending ({pendingCount})
-            </TabsTrigger>
-            <TabsTrigger value="submitted" className="gap-2">
-              <Upload className="w-4 h-4" />
-              Submitted ({submittedCount})
-            </TabsTrigger>
-            <TabsTrigger value="graded" className="gap-2">
-              <CheckCircle className="w-4 h-4" />
-              Graded ({gradedCount})
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        {/* Assignments List */}
-        <div className="space-y-4">
-          {filteredAssignments.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <FileText className="w-12 h-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                <p className="text-muted-foreground mb-2">
-                  No assignments found
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  Try adjusting your filters or check back later
-                </p>
-              </CardContent>
-            </Card>
+          {loadingAssignments ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-6 w-6 animate-spin text-slate-300" />
+              <span className="ml-2 text-sm text-slate-400">Loading...</span>
+            </div>
+          ) : filteredAssignments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+              <ClipboardList className="h-12 w-12 text-slate-200 mb-3" />
+              <p className="text-sm font-medium text-slate-500">No assignments found</p>
+              <p className="text-xs text-slate-400 mt-1 max-w-xs">
+                {assignments.length > 0
+                  ? "Try adjusting the search or status filter."
+                  : "You haven't received any assignments yet."}
+              </p>
+            </div>
           ) : (
-            filteredAssignments.map((assignment) => {
-              const daysUntil = getDaysUntilDue(assignment.dueDate);
-              const isOverdue =
-                daysUntil < 0 && assignment.status === "pending";
-
-              return (
-                <Card
-                  key={assignment.id}
-                  className={`hover:shadow-lg transition-shadow ${
-                    isOverdue ? "border-red-300 dark:border-red-800" : ""
-                  }`}
-                >
-                  <CardHeader>
-                    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2 flex-wrap">
-                          <Badge variant="outline">
-                            {assignment.courseCode}
+            <ul className="divide-y divide-slate-50">
+              {filteredAssignments.map((assignment) => {
+                const overdue = isOverdue(assignment);
+                return (
+                  <li key={assignment.id} className="px-5 py-4 hover:bg-slate-50/70 transition-colors">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-semibold text-slate-900">{assignment.title}</h3>
+                          <Badge className={cn("text-xs", getSubmissionStatusColor(assignment.submission_status))}>
+                            {assignment.submission_status}
                           </Badge>
-                          <h3 className="text-xl font-bold text-foreground">
-                            {assignment.title}
-                          </h3>
-                          {isOverdue && (
-                            <Badge className="bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">
-                              Overdue
-                            </Badge>
+                          {overdue && (
+                            <Badge className="bg-red-100 text-red-700 border-red-200 text-xs">Overdue</Badge>
                           )}
                         </div>
-                        <p className="text-sm text-muted-foreground mb-3">
-                          {assignment.courseName}
-                        </p>
-                        <p className="text-sm text-foreground mb-4">
-                          {assignment.description}
-                        </p>
-                      </div>
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="space-y-4">
-                    {/* Assignment Details Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <div className="p-3 bg-muted rounded-lg">
-                        <div className="flex items-center gap-2 mb-1">
-                          <Calendar className="w-4 h-4 text-muted-foreground" />
-                          <p className="text-xs text-muted-foreground">
-                            Uploaded
-                          </p>
+                        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                          <span className="flex items-center gap-1"><BookOpen className="h-3 w-3" />{assignment.course_code} {assignment.course_name}{assignment.course_section && ` (${assignment.course_section})`}</span>
+                          {assignment.due_date && <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />Due: {format(new Date(assignment.due_date), "dd MMM yyyy")}</span>}
+                          <span className="flex items-center gap-1"><GraduationCap className="h-3 w-3" />Max Score: {assignment.max_score}</span>
                         </div>
-                        <p className="text-sm font-medium text-foreground">
-                          {assignment.uploadedDate}
-                        </p>
-                      </div>
-
-                      <div className="p-3 bg-muted rounded-lg">
-                        <div className="flex items-center gap-2 mb-1">
-                          <Clock
-                            className={`w-4 h-4 ${getDueDateColor(
-                              assignment.dueDate,
-                              assignment.status
-                            )}`}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Due Date
-                          </p>
-                        </div>
-                        <p
-                          className={`text-sm font-medium ${getDueDateColor(
-                            assignment.dueDate,
-                            assignment.status
-                          )}`}
-                        >
-                          {assignment.dueDate}
-                        </p>
-                        {assignment.status === "pending" && (
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {isOverdue
-                              ? `${Math.abs(daysUntil)} days overdue`
-                              : `${daysUntil} days left`}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="p-3 bg-muted rounded-lg">
-                        <div className="flex items-center gap-2 mb-1">
-                          <FileText className="w-4 h-4 text-muted-foreground" />
-                          <p className="text-xs text-muted-foreground">
-                            Total Marks
-                          </p>
-                        </div>
-                        <p className="text-sm font-medium text-foreground">
-                          {assignment.totalMarks}
-                        </p>
-                      </div>
-
-                      {assignment.obtainedMarks !== undefined && (
-                        <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
-                          <div className="flex items-center gap-2 mb-1">
-                            <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                            <p className="text-xs text-green-600 dark:text-green-400">
-                              Obtained
-                            </p>
-                          </div>
-                          <p className="text-sm font-bold text-green-600 dark:text-green-400">
-                            {assignment.obtainedMarks}/{assignment.totalMarks}
-                          </p>
-                          <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                            {(
-                              (assignment.obtainedMarks /
-                                assignment.totalMarks) *
-                              100
-                            ).toFixed(1)}
-                            %
-                          </p>
-                        </div>
-                      )}
-
-                      {assignment.submittedDate &&
-                        !assignment.obtainedMarks && (
-                          <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                            <div className="flex items-center gap-2 mb-1">
-                              <Upload className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                              <p className="text-xs text-blue-600 dark:text-blue-400">
-                                Submitted
-                              </p>
-                            </div>
-                            <p className="text-sm font-medium text-foreground">
-                              {assignment.submittedDate}
-                            </p>
+                        {assignment.description && <p className="text-xs text-slate-600 line-clamp-2">{assignment.description}</p>}
+                        {assignment.attachment_url && (
+                          <div className="flex items-center gap-2">
+                            <Paperclip className="h-3 w-3 text-slate-400" />
+                            <a href={assignment.attachment_url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline">
+                              {assignment.attachment_name || "Download file"}
+                            </a>
                           </div>
                         )}
-                    </div>
-
-                    {/* Feedback Section */}
-                    {assignment.feedback && (
-                      <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                        <p className="text-sm font-medium text-blue-600 dark:text-blue-400 mb-2">
-                          Teacher's Feedback:
-                        </p>
-                        <p className="text-sm text-foreground">
-                          {assignment.feedback}
-                        </p>
+                        {assignment.submission_status === "graded" && assignment.submission_score !== null && (
+                          <div className="flex items-center gap-3 bg-green-50 p-2 rounded-lg mt-2">
+                            <CheckCircle className="h-4 w-4 text-green-600" />
+                            <span className="text-sm font-medium text-green-700">Score: {assignment.submission_score}/{assignment.max_score}</span>
+                            {assignment.submission_feedback && <span className="text-xs text-green-600">Feedback: {assignment.submission_feedback}</span>}
+                          </div>
+                        )}
                       </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      {/* Download Assignment Question */}
-                      <Button
-                        variant="outline"
-                        className="flex-1 gap-2"
-                        onClick={() =>
-                          handleDownload(
-                            assignment.fileUrl!,
-                            `${assignment.courseCode}-${assignment.title}.pdf`
-                          )
-                        }
-                      >
-                        <Download className="w-4 h-4" />
-                        Download Question
-                      </Button>
-
-                      {/* Upload/View Submission */}
-                      {assignment.status === "pending" && (
-                        <Button
-                          className="flex-1 gap-2"
-                          onClick={() => handleFileUpload(assignment.id)}
-                        >
-                          <Upload className="w-4 h-4" />
-                          Upload Solution
-                        </Button>
-                      )}
-
-                      {assignment.submissionFileUrl && (
-                        <Button
-                          variant="secondary"
-                          className="flex-1 gap-2"
-                          onClick={() =>
-                            handleDownload(
-                              assignment.submissionFileUrl!,
-                              `${assignment.courseCode}-submission.pdf`
-                            )
-                          }
-                        >
-                          <Eye className="w-4 h-4" />
-                          View My Submission
-                        </Button>
-                      )}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {(assignment.submission_status === "pending" || assignment.submission_status === "late") && (
+                          <Button size="sm" variant="default" className="h-8 gap-1" onClick={() => openSubmitDialog(assignment)}>
+                            <Upload className="h-3.5 w-3.5" /> Submit
+                          </Button>
+                        )}
+                        {(assignment.submission_status === "submitted" || assignment.submission_status === "graded") && (
+                          <Button size="sm" variant="outline" className="h-8 gap-1" onClick={() => openViewDialog(assignment)}>
+                            <Eye className="h-3.5 w-3.5" /> View
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </CardContent>
-                </Card>
-              );
-            })
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
       </div>
+
+      {/* Submit Dialog */}
+      <Dialog open={showSubmitDialog} onOpenChange={setShowSubmitDialog}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Upload className="h-5 w-5 text-blue-600" /> Submit Assignment</DialogTitle>
+            <DialogDescription>{selectedAssignment?.title} – {selectedAssignment?.course_code}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="text-sm text-slate-600">
+              {selectedAssignment?.description && <p className="mb-2">{selectedAssignment.description}</p>}
+              {selectedAssignment?.due_date && <p className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" />Due: {format(new Date(selectedAssignment.due_date), "dd MMM yyyy")}</p>}
+              <p className="flex items-center gap-1"><GraduationCap className="h-3.5 w-3.5" />Max score: {selectedAssignment?.max_score}</p>
+            </div>
+            <div>
+              <Label htmlFor="file-upload">Upload your work</Label>
+              <Input id="file-upload" type="file" className="mt-1" onChange={(e) => setUploadFile(e.target.files?.[0] || null)} accept=".pdf,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx" />
+              <p className="text-xs text-slate-400 mt-1">Allowed: PDF, Word, Excel, PowerPoint, Text</p>
+            </div>
+            {uploadFile && <div className="flex items-center gap-2 p-2 bg-slate-50 rounded"><FileText className="h-4 w-4 text-blue-500" /><span className="text-sm">{uploadFile.name}</span></div>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSubmitDialog(false)} disabled={uploading || submitting}>Cancel</Button>
+            <Button onClick={handleSubmitAssignment} disabled={!uploadFile || uploading || submitting}>
+              {uploading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Uploading...</>
+              : submitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Submitting...</>
+              : <><ArrowUpCircle className="h-4 w-4 mr-2" />Submit</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Submission Dialog */}
+      <Dialog open={showViewDialog} onOpenChange={setShowViewDialog}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Eye className="h-5 w-5 text-blue-600" /> Submission Details</DialogTitle>
+            <DialogDescription>{viewAssignment?.title} – {viewAssignment?.course_code}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {viewAssignment ? (
+              <>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div><span className="text-slate-500">Status:</span><Badge className={cn("ml-2", getSubmissionStatusColor(viewAssignment.submission_status))}>{viewAssignment.submission_status}</Badge></div>
+                  {viewAssignment.submitted_at && <div><span className="text-slate-500">Submitted:</span><span className="ml-2 font-medium">{format(new Date(viewAssignment.submitted_at), "dd MMM yyyy, h:mm a")}</span></div>}
+                </div>
+                {viewAssignment.submission_score !== null && (
+                  <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg">
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                    <span className="font-medium text-green-700">Score: {viewAssignment.submission_score}/{viewAssignment.max_score}</span>
+                  </div>
+                )}
+                {viewAssignment.submission_feedback && (
+                  <div className="p-3 bg-blue-50 rounded-lg">
+                    <p className="text-sm font-medium text-blue-700">Feedback:</p>
+                    <p className="text-sm text-blue-600">{viewAssignment.submission_feedback}</p>
+                  </div>
+                )}
+                {viewAssignment.submission_attachment_url && (
+                  <div className="flex items-center gap-2">
+                    <a href={viewAssignment.submission_attachment_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm">
+                      <Download className="h-4 w-4" />{viewAssignment.submission_attachment_name || "Download your file"}
+                    </a>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-slate-500">No submission details available.</p>
+            )}
+          </div>
+          <DialogFooter><Button onClick={() => setShowViewDialog(false)}>Close</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

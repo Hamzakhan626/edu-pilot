@@ -59,7 +59,6 @@ const navigation: Record<UserRole, NavItem[]> = {
     { name: "Attendance", href: "/student/attendance", icon: CheckSquare },
     { name: "Fees & Installments", href: "/student/fees", icon: CreditCard },
     { name: "Library & Resources", href: "/student/library", icon: Library },
-    { name: "Counselling", href: "/student/counselling", icon: HeadphonesIcon },
     { name: "Q&A / Discussions", href: "/student/qna", icon: MessagesSquare },
     {
       name: "Chat & Announcements",
