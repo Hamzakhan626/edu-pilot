@@ -159,11 +159,8 @@ export default function AdminCreateUserPage() {
   useEffect(() => {
     const loadLookups = async () => {
       try {
-        const [
-          { data: deptData },
-          { data: progData },
-          { data: studentData },
-        ] = await Promise.all([
+        // Fetch departments and programs in parallel
+        const [deptRes, progRes, studentRes] = await Promise.all([
           supabase.from('departments').select('id, name, code'),
           supabase
             .from('programs')
@@ -171,24 +168,17 @@ export default function AdminCreateUserPage() {
             .order('name', { ascending: true }),
           supabase
             .from('users')
-            .select(
-              `
-              id,
-              full_name,
-              enrollment_number,
-              email,
-              semester,
-              department:departments(name)
-            `,
-            )
+            .select('id, full_name, enrollment_number, email, semester, department_id')
             .eq('role', 'student')
             .order('full_name', { ascending: true }),
         ]);
 
-        setDepartments((deptData || []) as Department[]);
+        const deptData = (deptRes.data || []) as Department[];
+        setDepartments(deptData);
 
+        // Map programs (keeping the embedded department join for programs)
         const mappedPrograms: ProgramLite[] =
-          (progData || []).map((p: any) => ({
+          (progRes.data || []).map((p: any) => ({
             id: p.id,
             name: p.name,
             code: p.code,
@@ -197,15 +187,15 @@ export default function AdminCreateUserPage() {
           })) || [];
         setAllPrograms(mappedPrograms);
 
-        const mappedStudents: StudentLite[] =
-          (studentData || []).map((s: any) => ({
-            id: s.id,
-            full_name: s.full_name,
-            enrollment_number: s.enrollment_number,
-            email: s.email,
-            semester: s.semester,
-            department_name: s.department?.name ?? null,
-          })) || [];
+        // Map students – compute department_name locally instead of embedded join
+        const mappedStudents: StudentLite[] = (studentRes.data || []).map((s: any) => ({
+          id: s.id,
+          full_name: s.full_name,
+          enrollment_number: s.enrollment_number,
+          email: s.email,
+          semester: s.semester,
+          department_name: deptData.find((d) => d.id === s.department_id)?.name ?? null,
+        }));
         setStudents(mappedStudents);
       } catch (e) {
         console.error('Lookup load error', e);
