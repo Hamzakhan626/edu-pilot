@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation'; // added for navigation
 import {
   Card,
   CardContent,
@@ -23,11 +24,7 @@ import {
   Edit,
   Mail,
   Phone,
-  X,
-  Save,
 } from 'lucide-react';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/lib/supabase/client';
 
 type Role =
@@ -72,46 +69,17 @@ interface User {
   lastActive: string;
 }
 
-interface NewUserForm {
-  name: string;
-  email: string;
-  phone: string;
-  role: Role;
-  status: Status;
-  password: string;
-  confirmPassword: string;
-  address: string;
-  emergencyContact: string;
-  department_id: string;
-}
-
 export default function RolesUsersPage() {
+  const router = useRouter(); // used to navigate to create page
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRole, setSelectedRole] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
-  const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState<NewUserForm>({
-    name: '',
-    email: '',
-    phone: '',
-    role: 'student',
-    status: 'active',
-    password: '',
-    confirmPassword: '',
-    address: '',
-    emergencyContact: '',
-    department_id: '',
-  });
-
-  const [errors, setErrors] = useState<
-    Partial<Record<keyof NewUserForm, string>>
-  >({});
+  // No more modal states, form states, or validation – all removed
 
   const roleColors: Record<Role, string> = {
     admin: 'bg-purple-100 text-purple-700 border-purple-200',
@@ -128,62 +96,6 @@ export default function RolesUsersPage() {
     active: 'bg-green-100 text-green-700',
     inactive: 'bg-gray-100 text-gray-700',
     suspended: 'bg-red-100 text-red-700',
-  };
-
-  const handleInputChange = (field: keyof NewUserForm, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: '' }));
-    }
-  };
-
-  const handleRoleChange = (value: Role) => {
-    setFormData((prev) => ({
-      ...prev,
-      role: value,
-      // keep department if switching between dept-based roles, else reset
-      department_id:
-        value === 'student' || value === 'teacher' || value === 'hod'
-          ? prev.department_id
-          : '',
-    }));
-    if (errors.role) {
-      setErrors((prev) => ({ ...prev, role: '' }));
-    }
-  };
-
-  const validateForm = (): boolean => {
-    const newErrors: Partial<Record<keyof NewUserForm, string>> = {};
-
-    if (!formData.name.trim()) newErrors.name = 'Name is required';
-    if (!formData.email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
-      newErrors.email = 'Invalid email format';
-    }
-    if (!formData.phone.trim()) newErrors.phone = 'Phone is required';
-
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (formData.password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters';
-    }
-    if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-
-    // Department required for student, teacher, HOD
-    if (
-      (formData.role === 'student' ||
-        formData.role === 'teacher' ||
-        formData.role === 'hod') &&
-      !formData.department_id
-    ) {
-      newErrors.department_id = 'Department is required for this role';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
   };
 
   // Load users and departments from Supabase
@@ -256,105 +168,6 @@ export default function RolesUsersPage() {
     void fetchData();
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-
-    try {
-      setCreating(true);
-      setError(null);
-
-      // 1) Create auth user
-      const { data: signUpData, error: signUpError } =
-        await supabase.auth.signUp({
-          email: formData.email,
-          password: formData.password,
-        });
-
-      if (signUpError) {
-        setError(signUpError.message);
-        return;
-      }
-
-      const authUser = signUpData.user;
-      if (!authUser) {
-        setError('Failed to create auth user.');
-        return;
-      }
-
-      // 2) Insert into public.users
-      const insertData: any = {
-        id: authUser.id,
-        email: formData.email,
-        full_name: formData.name,
-        role: formData.role,
-        phone: formData.phone || null,
-        address: formData.address || null,
-        // if you later add semester/enrollment_number here, do it consistently
-      };
-
-      if (
-        (formData.role === 'student' ||
-          formData.role === 'teacher' ||
-          formData.role === 'hod') &&
-        formData.department_id
-      ) {
-        insertData.department_id = formData.department_id;
-      }
-
-      const { data: inserted, error: insertError } = await supabase
-        .from('users')
-        .insert([insertData])
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error(insertError);
-        setError(insertError.message);
-        return;
-      }
-
-      const row = inserted as UserRow;
-
-      const newUser: User = {
-        id: row.id,
-        name: row.full_name,
-        email: row.email,
-        phone: row.phone ?? '',
-        role: row.role,
-        status: 'active',
-        joinedDate: row.created_at?.split('T')[0] ?? '',
-        lastActive: 'Just now',
-      };
-
-      setUsers((prev) => [newUser, ...prev]);
-      setShowAddUserModal(false);
-      setFormData({
-        name: '',
-        email: '',
-        phone: '',
-        role: 'student',
-        status: 'active',
-        password: '',
-        confirmPassword: '',
-        address: '',
-        emergencyContact: '',
-        department_id: '',
-      });
-      setErrors({});
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message ?? 'Failed to create user.');
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleCloseModal = () => {
-    setShowAddUserModal(false);
-    setErrors({});
-  };
-
   // Statistics from loaded users
   const stats = {
     total: users.length,
@@ -390,8 +203,12 @@ export default function RolesUsersPage() {
             Manage user accounts and role assignments
           </p>
         </div>
-        <Button className="border" onClick={() => setShowAddUserModal(true)}>
-          <UserPlus className="mr-2 h-4 w-4 " />
+        {/* Button now navigates to the dedicated create page */}
+        <Button
+          className="border"
+          onClick={() => router.push('/admin/users/create')}
+        >
+          <UserPlus className="mr-2 h-4 w-4" />
           Add New User
         </Button>
       </div>
@@ -399,294 +216,6 @@ export default function RolesUsersPage() {
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
           {error}
-        </div>
-      )}
-
-      {/* Add User Modal */}
-      {showAddUserModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 h-screen">
-          <div className="w-full max-w-3xl max-h-[90vh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="border-b px-6 py-4 flex items-center justify-between flex-shrink-0">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Add New User
-                </h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Fill in the details to create a new user account
-                </p>
-              </div>
-              <Button variant="outline" size="sm" onClick={handleCloseModal}>
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto">
-              <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                {/* Basic Information */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                    <Users className="h-5 w-5 mr-2 text-blue-600" />
-                    Basic Information
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="name">Full Name *</Label>
-                      <Input
-                        id="name"
-                        placeholder="Enter full name"
-                        value={formData.name}
-                        onChange={(e) =>
-                          handleInputChange('name', e.target.value)
-                        }
-                        className={errors.name ? 'border-red-500' : ''}
-                      />
-                      {errors.name && (
-                        <p className="text-xs text-red-500">{errors.name}</p>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="email">Email Address *</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        placeholder="user@example.com"
-                        value={formData.email}
-                        onChange={(e) =>
-                          handleInputChange('email', e.target.value)
-                        }
-                        className={errors.email ? 'border-red-500' : ''}
-                      />
-                      {errors.email && (
-                        <p className="text-xs text-red-500">{errors.email}</p>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="phone">Phone Number *</Label>
-                      <Input
-                        id="phone"
-                        placeholder="+92 3XX XXXXXXX"
-                        value={formData.phone}
-                        onChange={(e) =>
-                          handleInputChange('phone', e.target.value)
-                        }
-                        className={errors.phone ? 'border-red-500' : ''}
-                      />
-                      {errors.phone && (
-                        <p className="text-xs text-red-500">{errors.phone}</p>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="emergencyContact">
-                        Emergency Contact
-                      </Label>
-                      <Input
-                        id="emergencyContact"
-                        placeholder="+92 3XX XXXXXXX"
-                        value={formData.emergencyContact}
-                        onChange={(e) =>
-                          handleInputChange(
-                            'emergencyContact',
-                            e.target.value,
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="address">Address</Label>
-                    <Textarea
-                      id="address"
-                      placeholder="Enter complete address"
-                      value={formData.address}
-                      onChange={(e) =>
-                        handleInputChange('address', e.target.value)
-                      }
-                      rows={2}
-                    />
-                  </div>
-                </div>
-
-                {/* Role & Access */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                    <Shield className="h-5 w-5 mr-2 text-purple-600" />
-                    Role & Access
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="role">User Role *</Label>
-                      <select
-                        id="role"
-                        value={formData.role}
-                        onChange={(e) =>
-                          handleRoleChange(e.target.value as Role)
-                        }
-                        className="w-full px-3 py-2 border rounded-lg bg-white"
-                      >
-                        <option value="student">Student</option>
-                        <option value="teacher">Teacher</option>
-                        <option value="admin">Admin</option>
-                        <option value="parent">Parent</option>
-                        <option value="hr">HR</option>
-                        <option value="hod">HOD</option>
-                        <option value="finance">Finance</option>
-                        <option value="staff">Staff</option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="status">Account Status *</Label>
-                      <select
-                        id="status"
-                        value={formData.status}
-                        onChange={(e) =>
-                          handleInputChange('status', e.target.value as Status)
-                        }
-                        className="w-full px-3 py-2 border rounded-lg bg-white"
-                      >
-                        <option value="active">Active</option>
-                        <option value="inactive">Inactive</option>
-                        <option value="suspended">Suspended</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Department selection for student/teacher/HOD */}
-                  {(formData.role === 'student' ||
-                    formData.role === 'teacher' ||
-                    formData.role === 'hod') && (
-                    <div className="space-y-2">
-                      <Label htmlFor="department">
-                        Department *
-                      </Label>
-                      <select
-                        id="department"
-                        value={formData.department_id}
-                        onChange={(e) =>
-                          handleInputChange('department_id', e.target.value)
-                        }
-                        className={`w-full px-3 py-2 border rounded-lg bg-white ${
-                          errors.department_id ? 'border-red-500' : ''
-                        }`}
-                      >
-                        <option value="">Select Department</option>
-                        {departments.map((dept) => (
-                          <option key={dept.id} value={dept.id}>
-                            {dept.name}{' '}
-                            {dept.code ? `(${dept.code})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      {errors.department_id && (
-                        <p className="text-xs text-red-500">
-                          {errors.department_id}
-                        </p>
-                      )}
-                      {formData.role === 'hod' && (
-                        <p className="text-xs text-gray-500">
-                          This user will be assigned as Head of Department for
-                          the selected department.
-                        </p>
-                      )}
-                      {(formData.role === 'student' ||
-                        formData.role === 'teacher') && (
-                        <p className="text-xs text-gray-500">
-                          This defines the department this{' '}
-                          {formData.role} belongs to. Detailed
-                          program/semester is managed in the dedicated
-                          admin create-user page.
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Security */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                    <Shield className="h-5 w-5 mr-2 text-red-600" />
-                    Security
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="password">Password *</Label>
-                      <Input
-                        id="password"
-                        type="password"
-                        placeholder="Minimum 8 characters"
-                        value={formData.password}
-                        onChange={(e) =>
-                          handleInputChange('password', e.target.value)
-                        }
-                        className={errors.password ? 'border-red-500' : ''}
-                      />
-                      {errors.password && (
-                        <p className="text-xs text-red-500">
-                          {errors.password}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="confirmPassword">
-                        Confirm Password *
-                      </Label>
-                      <Input
-                        id="confirmPassword"
-                        type="password"
-                        placeholder="Re-enter password"
-                        value={formData.confirmPassword}
-                        onChange={(e) =>
-                          handleInputChange(
-                            'confirmPassword',
-                            e.target.value,
-                          )
-                        }
-                        className={
-                          errors.confirmPassword ? 'border-red-500' : ''
-                        }
-                      />
-                      {errors.confirmPassword && (
-                        <p className="text-xs text-red-500">
-                          {errors.confirmPassword}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </form>
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-end space-x-3 px-6 py-4 border-t flex-shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleCloseModal}
-              >
-                Cancel
-              </Button>
-              <Button onClick={handleSubmit} disabled={creating}>
-                {creating ? (
-                  <>
-                    <Save className="mr-2 h-4 w-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-2 h-4 w-4" />
-                    Create User
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
         </div>
       )}
 
